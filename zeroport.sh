@@ -325,7 +325,7 @@ step_update() {
   run "Install all pending upgrades" apt-get -y -qq -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold full-upgrade
   run "Install base packages" apt-get install -y -qq ca-certificates curl gnupg sudo \
-    ufw unattended-upgrades iproute2 openssh-server
+    ufw unattended-upgrades needrestart iproute2 openssh-server
 }
 
 step_base() {
@@ -411,6 +411,14 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
   run "Enable unattended-upgrades" systemctl enable --now unattended-upgrades
+  # Without this, a patched library stays unused by running services until
+  # they restart. Kernel updates still wait for a reboot you choose.
+  write_file /etc/needrestart/conf.d/50-zeroport.conf 644 <<'EOF'
+# Managed by zeroport: restart services that use outdated libraries.
+$nrconf{restart} = 'a';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehints} = 0;
+EOF
 }
 
 step_user() {
@@ -871,6 +879,15 @@ cmd_audit() {
   local pending
   pending="$(apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | grep -c '^Inst ' || true)"
   [[ "$pending" -eq 0 ]] && pass "No pending upgrades (cached index)" || note "${pending} packages upgradable (cached index)"
+  if command -v needrestart >/dev/null 2>&1; then
+    [[ -f /etc/needrestart/conf.d/50-zeroport.conf ]] && pass "needrestart restarts services automatically" || fail "needrestart auto-restart not configured"
+    local stale
+    stale="$(needrestart -b -r l 2>/dev/null | sed -n 's/^NEEDRESTART-SVC: //p' | tr '\n' ' ' || true)"
+    [[ -z "$stale" ]] && pass "No services running outdated libraries" || note "Services running outdated libraries: ${stale}"
+  else
+    fail "needrestart not installed"
+  fi
+
   section "Kernel and network"
   if [[ -f "$SYSCTL_DROPIN" ]]; then
     local key want have drift=()
