@@ -1,0 +1,2 @@
+# pass/note/fail always succeed, so A && pass || fail is an if/else here.
+disable=SC2015
