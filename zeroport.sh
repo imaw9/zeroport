@@ -56,6 +56,9 @@ section() { printf '\n%s▸ %s%s\n' "$BOLD" "$*" "$NC"; to_log "STEP  $*"; }
 
 ERROR_REPORTED=0
 on_error() {
+  # Report only from the main shell; a failing $(...) used for display text
+  # already shows up in its caller's output.
+  [[ "${BASHPID:-$$}" == "$$" ]] || return 0
   ((ERROR_REPORTED)) && return 0
   ERROR_REPORTED=1
   err "Failed at line $1 (exit $2). Log: ${LOG_FILE:-none}"
@@ -822,7 +825,7 @@ cmd_audit() {
   else
     note "No swap"
   fi
-  pass "Memory: $(free -h | awk '/^Mem:/{print $3" used of "$2}'); disk /: $(df -h / | awk 'NR==2{print $3" used of "$2}')"
+  pass "Memory: $(free -h 2>/dev/null | awk '/^Mem:/{print $3" used of "$2}'); disk /: $(df -h / 2>/dev/null | awk 'NR==2{print $3" used of "$2}')"
 
   section "Updates"
   check_service unattended-upgrades
