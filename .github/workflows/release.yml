@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version matches tag
+        run: |
+          version="$(bash zeroport.sh --version | awk '{print $2}')"
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "zeroport.sh is ${version}, tag is ${GITHUB_REF_NAME}"; exit 1; }
+      - name: Lint and smoke test
+        run: shellcheck -x zeroport.sh tests/smoke.sh && bash tests/smoke.sh
+      - name: Publish zeroport.sh with checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum zeroport.sh > zeroport.sh.sha256
+          gh release create "${GITHUB_REF_NAME}" zeroport.sh zeroport.sh.sha256 \
+            --title "${GITHUB_REF_NAME}" --generate-notes
