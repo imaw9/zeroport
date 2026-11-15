@@ -699,6 +699,7 @@ PubkeyAuthentication yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
+X11Forwarding no
 EOF
 )"
   if [[ -f "$SSHD_DROPIN" ]] && [[ "$(cat "$SSHD_DROPIN")" == "$desired" ]]; then
@@ -912,6 +913,7 @@ cmd_audit() {
   grep -qi '^permitrootlogin no$' <<<"$sshd_t" && pass "Root login disabled" || fail "Root login allowed ($(grep -i '^permitrootlogin ' <<<"$sshd_t"))"
   grep -qi '^passwordauthentication no$' <<<"$sshd_t" && pass "Password login disabled" || fail "Password login enabled"
   grep -qi '^kbdinteractiveauthentication no$' <<<"$sshd_t" && pass "Keyboard-interactive disabled" || fail "Keyboard-interactive enabled"
+  grep -qi '^x11forwarding no$' <<<"$sshd_t" && pass "X11 forwarding disabled" || note "X11 forwarding enabled"
   local sudoers
   sudoers="$(getent group sudo | cut -d: -f4)"
   [[ -n "$sudoers" ]] && pass "sudo group: ${sudoers}" || fail "No sudo user"
