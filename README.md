@@ -55,7 +55,7 @@ applications, databases or Docker. The base system is all it touches.
 
 ## Usage
 
-Download a release, check its checksum, then run it as root:
+Download a release, check it, then run it as root:
 
 ```bash
 V=v0.1.0
@@ -63,12 +63,19 @@ curl -fsSLO https://github.com/imaw9/zeroport/releases/download/$V/zeroport.sh
 curl -fsSLO https://github.com/imaw9/zeroport/releases/download/$V/zeroport.sh.sha256
 sha256sum -c zeroport.sh.sha256
 
-bash zeroport.sh bootstrap --dry-run   # preview every change
-bash zeroport.sh bootstrap             # apply, then reboot
+bash zeroport.sh bootstrap   # shows the plan, asks, then applies and reboots
 ```
 
 Pin a release tag rather than `main`. The script runs as root, so you should
 know exactly which version you are running.
+
+The checksum only proves the download is intact. To confirm the file was built
+from this repository by its release workflow, verify its provenance from any
+machine with the GitHub CLI:
+
+```bash
+gh attestation verify zeroport.sh --repo imaw9/zeroport
+```
 
 ### The three commands
 
@@ -81,6 +88,7 @@ audit       read-only report; exits 1 if anything fails
 A full run on a new machine:
 
 1. `bash zeroport.sh bootstrap` over the provider's public IP, as root.
+   - Read the plan it prints. Nothing changes until you answer `Apply this plan?`.
    - Save the sudo password it shows you.
    - Before SSH hardening, open a **second terminal**, log in as your new
      user with your key, and run `sudo -v`. Type `yes` only when both work.
@@ -94,7 +102,7 @@ A full run on a new machine:
 
 | Option | Meaning |
 |---|---|
-| `--dry-run` | Show what would change; change nothing |
+| `--dry-run` | Print the plan and stop. Asks nothing, changes nothing |
 | `--yes` | Accept prompts whose default is yes. Dangerous steps still need you to type `yes` |
 | `--only=user,ssh` | Run selected bootstrap steps |
 | `--user=NAME` | Admin username |
@@ -103,6 +111,12 @@ A full run on a new machine:
 
 ## Safety rails
 
+- **Plan first.** `bootstrap` runs every step in dry-run mode, prints the plan,
+  and asks once before changing anything. Declining leaves the machine as it was.
+- **Two kinds of confirmation.** Ordinary prompts take `y` or `n`, and `--yes`
+  accepts only those whose default is yes. Steps that can cut your connection
+  (disabling password and root login, closing public ports) need you to type
+  `yes`, and `--yes` never skips them.
 - **Fresh machines only.** `bootstrap` stops if it finds Docker, a database,
   active ufw, nftables rules or public TCP listeners. On a machine that runs
   services, a firewall or SSH change could cut them off. Re-runs on a machine
