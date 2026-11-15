@@ -11,10 +11,35 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Syntax
         run: bash -n zeroport.sh
       - name: ShellCheck
         run: shellcheck -x zeroport.sh tests/smoke.sh
       - name: Smoke tests
         run: bash tests/smoke.sh
+
+  debian:
+    name: Debian 13 dry run
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v7
+      - name: Bootstrap dry run changes nothing
+        run: |
+          before="$(find /etc -type f -newer /etc/os-release | sort | sha256sum)"
+          bash zeroport.sh bootstrap --dry-run --user=ci 2>&1 | tee plan.txt
+          grep -q 'Admin user' plan.txt
+          grep -q 'write /etc/ssh/sshd_config.d/00-zeroport.conf' plan.txt
+          if grep -qE '✖|Failed at line' plan.txt; then echo 'plan reported an error'; exit 1; fi
+          after="$(find /etc -type f -newer /etc/os-release | sort | sha256sum)"
+          test "$before" = "$after"
+          if id ci 2>/dev/null; then echo 'dry run created a user'; exit 1; fi
+      - name: Audit runs and reports instead of crashing
+        run: |
+          rc=0
+          bash zeroport.sh audit > audit.txt 2>&1 || rc=$?
+          cat audit.txt
+          test "$rc" -eq 1
+          grep -q 'failed,' audit.txt
+          if grep -q 'Failed at line' audit.txt; then echo 'audit crashed'; exit 1; fi

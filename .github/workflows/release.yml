@@ -6,18 +6,24 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check version matches tag
         run: |
           version="$(bash zeroport.sh --version | awk '{print $2}')"
           test "v${version}" = "${GITHUB_REF_NAME}" || { echo "zeroport.sh is ${version}, tag is ${GITHUB_REF_NAME}"; exit 1; }
       - name: Lint and smoke test
         run: shellcheck -x zeroport.sh tests/smoke.sh && bash tests/smoke.sh
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: zeroport.sh
       - name: Publish zeroport.sh with checksum
         env:
           GH_TOKEN: ${{ github.token }}
