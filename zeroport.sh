@@ -23,7 +23,7 @@ TS_HOSTNAME=""
 SWAP_SIZE="2G"
 COMMAND=""
 
-BOOTSTRAP_STEPS=(update base swap auto-updates user tailscale cloudflared ssh reboot)
+BOOTSTRAP_STEPS=(update base sysctl swap auto-updates user tailscale cloudflared ssh reboot)
 
 STATE_DIR="/var/lib/zeroport"
 LOG_DIR="/var/log/zeroport"
@@ -31,6 +31,7 @@ RUN_ID="$(date -u +%Y%m%d-%H%M%S)"
 LOG_FILE=""
 BACKUP_DIR="/var/backups/zeroport/${RUN_ID}"
 SSHD_DROPIN="/etc/ssh/sshd_config.d/00-zeroport.conf"
+SYSCTL_DROPIN="/etc/sysctl.d/90-zeroport.conf"
 CLOUDFLARED_ENV="/etc/cloudflared/tunnel.env"
 CLOUDFLARED_METRICS="127.0.0.1:20241"
 
@@ -341,6 +342,42 @@ SystemMaxUse=200M
 MaxRetentionSec=14day
 EOF
   run "Restart journald" systemctl restart systemd-journald
+}
+
+# Network and kernel hardening. rp_filter is loose (2) so Tailscale routing keeps
+# working; log_martians is left alone because ufw resets it when enabled.
+sysctl_settings() {
+  cat <<'EOF'
+# Managed by zeroport.
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.tcp_syncookies = 1
+kernel.kptr_restrict = 2
+kernel.dmesg_restrict = 1
+kernel.yama.ptrace_scope = 1
+EOF
+}
+
+step_sysctl() {
+  section "Kernel and network hardening"
+  sysctl_settings | write_file "$SYSCTL_DROPIN" 644
+  # Some keys are read-only in containers; report instead of aborting.
+  run "Apply ${SYSCTL_DROPIN}" sysctl -q -p "$SYSCTL_DROPIN" \
+    || warn "Some settings could not be applied; 'audit' lists them."
 }
 
 step_swap() {
@@ -706,6 +743,7 @@ step_reboot() {
 run_bootstrap_steps() {
   should_run update && step_update
   should_run base && step_base
+  should_run sysctl && step_sysctl
   should_run swap && step_swap
   should_run auto-updates && step_auto_updates
   should_run user && step_user
@@ -833,6 +871,23 @@ cmd_audit() {
   local pending
   pending="$(apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | grep -c '^Inst ' || true)"
   [[ "$pending" -eq 0 ]] && pass "No pending upgrades (cached index)" || note "${pending} packages upgradable (cached index)"
+  section "Kernel and network"
+  if [[ -f "$SYSCTL_DROPIN" ]]; then
+    local key want have drift=()
+    while IFS='=' read -r key want; do
+      key="$(tr -d ' ' <<<"$key")" want="$(tr -d ' ' <<<"$want")"
+      [[ -z "$key" || "$key" == \#* ]] && continue
+      have="$(sysctl -n "$key" 2>/dev/null || echo unavailable)"
+      [[ "$have" == "$want" ]] || drift+=("${key}=${have} (want ${want})")
+    done <"$SYSCTL_DROPIN"
+    if ((${#drift[@]})); then
+      note "sysctl drift: ${drift[*]}"
+    else
+      pass "All zeroport sysctl settings active"
+    fi
+  else
+    fail "${SYSCTL_DROPIN} missing"
+  fi
 
   section "SSH"
   local sshd_t
