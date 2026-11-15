@@ -15,6 +15,7 @@ set -Eeuo pipefail
 ZEROPORT_VERSION="0.1.0"
 
 DRY_RUN=0
+DRY_LABEL="dry-run"   # "planned" while bootstrap previews its plan
 ASSUME_YES=0
 ONLY_STEPS=""
 ADMIN_USER=""
@@ -66,7 +67,7 @@ run() {
   local desc="$1"
   shift
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '  %s◦%s %s %s(dry-run)%s\n' "$YELLOW" "$NC" "$desc" "$DIM" "$NC"
+    printf '  %s◦%s %s %s(%s)%s\n' "$YELLOW" "$NC" "$desc" "$DIM" "$DRY_LABEL" "$NC"
     return 0
   fi
   to_log "RUN   ${desc} :: $*"
@@ -91,7 +92,7 @@ write_file() {
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     rm -f "$tmp"
-    printf '  %s◦%s write %s %s(dry-run)%s\n' "$YELLOW" "$NC" "$path" "$DIM" "$NC"
+    printf '  %s◦%s write %s %s(%s)%s\n' "$YELLOW" "$NC" "$path" "$DIM" "$DRY_LABEL" "$NC"
     return 0
   fi
   if [[ -f "$path" ]]; then
@@ -116,6 +117,11 @@ require_tty() {
 confirm() {
   local prompt="$1" default="${2:-Y}" reply hint="[Y/n]"
   [[ "$default" == "N" ]] && hint="[y/N]"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '  %s◦%s would ask: %s %s %s(%s)%s\n' "$YELLOW" "$NC" "$prompt" "$hint" "$DIM" "$DRY_LABEL" "$NC"
+    if [[ "$default" == "Y" ]]; then return 0; fi
+    return 1
+  fi
   if [[ "$ASSUME_YES" -eq 1 ]]; then
     printf '  %s?%s %s %s %s(--yes)%s\n' "$BOLD" "$NC" "$prompt" "$hint" "$DIM" "$NC"
     if [[ "$default" == "Y" ]]; then return 0; fi
@@ -137,7 +143,7 @@ confirm() {
 confirm_danger() {
   local reply
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '  %s◦%s would ask: %s %s(dry-run)%s\n' "$YELLOW" "$NC" "$1" "$DIM" "$NC"
+    printf '  %s◦%s would ask: %s %s(%s)%s\n' "$YELLOW" "$NC" "$1" "$DIM" "$DRY_LABEL" "$NC"
     return 0
   fi
   require_tty
@@ -429,7 +435,7 @@ step_tailscale() {
     run "Install tailscale" apt-get install -y -qq tailscale
   fi
 
-  if [[ "$DRY_RUN" -eq 0 ]] && tailscale_running; then
+  if tailscale_running; then
     ok "Tailscale connected as $(tailscale ip -4 2>/dev/null | head -n1)"
   elif [[ "$DRY_RUN" -eq 1 ]]; then
     info "would ask for the hostname and a tagged, pre-approved auth key"
@@ -652,9 +658,11 @@ EOF
     return 0
   fi
 
-  info "Keep this session open. In a NEW terminal, verify:"
-  info "  ssh -o PreferredAuthentications=publickey ${user:-<user>}@$(public_ip)"
-  info "  sudo -v    # enter the sudo password you saved"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    info "Keep this session open. In a NEW terminal, verify:"
+    info "  ssh -o PreferredAuthentications=publickey ${user:-<user>}@$(public_ip)"
+    info "  sudo -v    # enter the sudo password you saved"
+  fi
   confirm_danger "Disable password and root SSH login now? Only continue if both checks passed." \
     || { warn "Skipped SSH hardening"; return 0; }
 
@@ -692,15 +700,7 @@ step_reboot() {
   fi
 }
 
-cmd_bootstrap() {
-  require_root
-  init_log
-  preflight_bootstrap
-  if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
-    printf '\n  Steps: %s\n' "${ONLY_STEPS:-${BOOTSTRAP_STEPS[*]}}"
-    confirm "Start bootstrap?" Y || exit 0
-  fi
-  export DEBIAN_FRONTEND=noninteractive
+run_bootstrap_steps() {
   should_run update && step_update
   should_run base && step_base
   should_run swap && step_swap
@@ -711,6 +711,30 @@ cmd_bootstrap() {
   should_run ssh && step_ssh
   should_run reboot && step_reboot
   return 0
+}
+
+# Always show the plan first: the same steps run in dry-run mode, then the
+# user confirms before anything changes.
+cmd_bootstrap() {
+  require_root
+  preflight_bootstrap
+  export DEBIAN_FRONTEND=noninteractive
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run_bootstrap_steps
+    return 0
+  fi
+
+  printf '\n%s════ Plan: nothing has changed yet ════%s\n' "$BOLD" "$NC"
+  DRY_RUN=1 DRY_LABEL="planned"
+  run_bootstrap_steps
+  DRY_RUN=0 DRY_LABEL="dry-run"
+  printf '\n'
+  confirm "Apply this plan?" Y || { info "Nothing changed."; exit 0; }
+
+  init_log
+  to_log "INFO  plan confirmed; steps: ${ONLY_STEPS:-${BOOTSTRAP_STEPS[*]}}"
+  printf '\n%s════ Applying ════%s\n' "$BOLD" "$NC"
+  run_bootstrap_steps
 }
 
 # ── Lockdown ──────────────────────────────────────────────────────────────────
