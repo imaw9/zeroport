@@ -20,10 +20,11 @@ applications, databases or Docker. The base system is all it touches.
 
 | Area | Result |
 |---|---|
-| Updates | Full upgrade, then unattended **security** updates; never reboots on its own |
+| Updates | Full upgrade, then unattended **security** updates; services using a patched library restart automatically (needrestart); the machine never reboots on its own |
 | Base | Timezone UTC, journald kept 14 days / 200 MB, 2 GB swap if none exists |
+| Kernel | No ICMP redirects or source routing, SYN cookies, restricted kernel pointers, dmesg and ptrace; loose `rp_filter` so Tailscale routing works |
 | Admin user | Named by you, in `sudo`, with a generated sudo password shown once |
-| SSH | Public keys only; root and password login disabled |
+| SSH | Public keys only; root login, password login and X11 forwarding disabled |
 | Tailscale | Official signed apt repo, joined with a tagged auth key, auto-update on |
 | Cloudflare Tunnel | Official signed apt repo, token-based connector, daily update with rollback |
 | Firewall | ufw: deny incoming, allow `tailscale0` and `41641/udp` |
@@ -80,7 +81,7 @@ gh attestation verify zeroport.sh --repo imaw9/zeroport
 ### The three commands
 
 ```text
-bootstrap   patch → base → swap → auto-updates → user → tailscale → cloudflared → ssh → reboot
+bootstrap   update → base → sysctl → swap → auto-updates → user → tailscale → cloudflared → ssh → reboot
 lockdown    enable ufw; refuses unless this SSH session arrives over Tailscale
 audit       read-only report; exits 1 if anything fails
 ```
@@ -152,14 +153,18 @@ The two access paths update independently:
   Cloudflare's apt repository keeps only the latest version, so the rollback
   restores the saved binary instead of downgrading through apt.
 
-Debian security updates install automatically. Kernel and libc updates take
-effect after a reboot. `audit` tells you when one is pending, and you choose
-when to reboot.
+Debian security updates install automatically, and needrestart restarts the
+services that were using the old libraries. A few core services such as dbus
+are never restarted automatically. `audit` lists any still running old code.
+Kernel updates take effect only after a reboot. `audit` reports a pending one,
+and you choose when to reboot.
 
 ## Not included
 
-Docker, applications, databases, backups, monitoring, fail2ban (there is no
-public SSH to protect) and changing the SSH port. Add them in your own deployment
+Docker, applications, databases, backups, monitoring, fail2ban or SSH
+two-factor (there is no public SSH to protect) and changing the SSH port.
+`MaxAuthTries` stays at the default 6. An SSH agent with several keys offers
+them in turn and would hit a lower limit before reaching the right key. Add them in your own deployment
 layer. If you add Docker later, note that published container ports bypass ufw's
 input rules: bind them to `127.0.0.1` and expose them through the tunnel.
 
